@@ -7,7 +7,7 @@ from learn2learn.algorithms.base_learner import BaseLearner
 from learn2learn.utils import clone_module, update_module
 
 
-def maml_update(model, lr, grads=None):
+def maml_update(model, lr_dict, grads=None):
     """
     [[Source]](https://github.com/learnables/learn2learn/blob/master/learn2learn/algorithms/maml.py)
 
@@ -23,26 +23,38 @@ def maml_update(model, lr, grads=None):
     **Arguments**
 
     * **model** (Module) - The model to update.
-    * **lr** (float) - The learning rate used to update the model.
+    * **lr_dict** (dict) - contains the learning rates to be used for each layer when updating the model.
     * **grads** (list, *optional*, default=None) - A list of gradients for each parameter
         of the model. If None, will use the gradients in .grad attributes.
 
     **Example**
     ~~~python
-    maml = l2l.algorithms.MAML(Model(), lr=0.1)
+    maml = l2l.algorithms.MAML(Model(), lr_dict={'default': 0.1})
     model = maml.clone() # The next two lines essentially implement model.adapt(loss)
     grads = autograd.grad(loss, model.parameters(), create_graph=True)
-    maml_update(model, lr=0.1, grads)
+    maml_update(model, lr_dict={'default': 0.1}, grads)
     ~~~
     """
+    # helper function to get a layer's lr from the lr_dict
+    def get_lr_from_dict(name):
+        # remove possible 'module' and '.weight' or '.bias'
+        remove_list = ['module.', '.weight', '.bias']
+        for remove in remove_list:
+            name = name.replace(remove, '')
+
+        lr = lr_dict[name] if name in lr_dict.keys() else lr_dict['default']
+
+        return lr
+
     if grads is not None:
-        params = list(model.parameters())
+        params = list(model.named_parameters())
         if not len(grads) == len(list(params)):
             msg = 'WARNING:maml_update(): Parameters and gradients have different length. ('
             msg += str(len(params)) + ' vs ' + str(len(grads)) + ')'
             print(msg)
-        for p, g in zip(params, grads):
+        for (name, p), g in zip(params, grads):
             if g is not None:
+                lr = get_lr_from_dict(name)
                 p.update = - lr * g
     return update_module(model)
 
@@ -64,7 +76,7 @@ class MAML(BaseLearner):
     **Arguments**
 
     * **model** (Module) - Module to be wrapped.
-    * **lr** (float) - Fast adaptation learning rate.
+    * **lr_dict** (dict) - Dict of fast adaptation learning rates.
     * **first_order** (bool, *optional*, default=False) - Whether to use the first-order
         approximation of MAML. (FOMAML)
     * **allow_unused** (bool, *optional*, default=None) - Whether to allow differentiation
@@ -79,7 +91,7 @@ class MAML(BaseLearner):
     **Example**
 
     ~~~python
-    linear = l2l.algorithms.MAML(nn.Linear(20, 10), lr=0.01)
+    linear = l2l.algorithms.MAML(nn.Linear(20, 10), lr_dict={'default': 0.01})
     clone = linear.clone()
     error = loss(clone(X), y)
     clone.adapt(error)
@@ -90,13 +102,13 @@ class MAML(BaseLearner):
 
     def __init__(self,
                  model,
-                 lr,
+                 lr_dict,
                  first_order=False,
                  allow_unused=None,
                  allow_nograd=False):
         super(MAML, self).__init__()
         self.module = model
-        self.lr = lr
+        self.lr_dict = lr_dict
         self.first_order = first_order
         self.allow_nograd = allow_nograd
         if allow_unused is None:
@@ -166,7 +178,7 @@ class MAML(BaseLearner):
                 print('learn2learn: Maybe try with allow_nograd=True and/or allow_unused=True ?')
 
         # Update the module
-        self.module = maml_update(self.module, self.lr, gradients)
+        self.module = maml_update(self.module, self.lr_dict, gradients)
 
     def clone(self, first_order=None, allow_unused=None, allow_nograd=None):
         """
@@ -196,7 +208,7 @@ class MAML(BaseLearner):
         if allow_nograd is None:
             allow_nograd = self.allow_nograd
         return MAML(clone_module(self.module),
-                    lr=self.lr,
+                    lr_dict=self.lr_dict,
                     first_order=first_order,
                     allow_unused=allow_unused,
                     allow_nograd=allow_nograd)
